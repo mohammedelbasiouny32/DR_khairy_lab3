@@ -1,0 +1,326 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color[gray]{0.95},
+  frame=single, framerule=0pt,
+  breaklines=true, columns=fullflexible,
+  keepspaces=true, showstringspaces=false,
+  xleftmargin=6pt, xrightmargin=6pt,
+  aboveskip=6pt, belowskip=6pt
+}
+
+\newcommand{\IfFigure}[3]{\IfFileExists{#1}{\includegraphics[width=#2]{#1}}{\fbox{\parbox{0.8\linewidth}{\centering\vspace{2cm}Insert figure file \texttt{\detokenize{#1}} here\vspace{2cm}}}}}
+
+\title{\textbf{OFDM System Simulation}\\[0.4em]
+\large BER performance of BPSK and 16-QAM over flat and frequency-selective Rayleigh fading}
+\author{Cairo University --- Faculty of Engineering\\Electronics and Communications Dept.\\3rd Year --- Digital Communications (Modulation), Project Part 3\\[1em]Student name(s): \rule{5cm}{0.4pt} \quad Group: \rule{2cm}{0.4pt}}
+\date{Submission date: 14 December 2026}
+
+\begin{document}
+
+\maketitle
+
+%==================================================================
+\section{Introduction and objectives}
+
+This project simulates an orthogonal frequency-division multiplexing (OFDM) link in MATLAB. The goal is to measure the bit error rate (BER) of two modulation schemes, BPSK and 16-QAM, over two fading channel models, with and without a rate $1/5$ repetition code. The results are plotted as BER against the signal-to-noise ratio, giving eight curves in total ($2$ modulations $\times$ $2$ channels $\times$ $2$ coding options).
+
+The main objectives are:
+\begin{itemize}[leftmargin=*]
+  \item Build a complete OFDM transmitter and receiver, following the block diagram of the project specification.
+  \item Model a flat Rayleigh fading channel and a frequency-selective Rayleigh fading channel in the frequency domain.
+  \item Estimate BER by Monte Carlo simulation and compare it with the theoretical BER of uncoded BPSK over flat Rayleigh fading.
+  \item Show how interleaving and repetition coding improve performance on the frequency-selective channel, where each subcarrier fades independently.
+\end{itemize}
+
+%==================================================================
+\section{System model}
+
+The transmitter chain, as specified in the project, is: data bits, coding, interleaver, mapper, 256-point IFFT, addition of the cyclic extension, channel, and receiver. The receiver reverses each step in the opposite order.
+
+\begin{table}[H]
+\centering
+\caption{Transmitter and receiver blocks}
+\begin{tabular}{p{2.8cm} p{5.2cm} p{5.6cm}}
+\toprule
+\textbf{Block} & \textbf{Function in this project} & \textbf{Implementation} \\
+\midrule
+Coding & No coding, or rate $1/5$ repetition code & \texttt{repelem} (each bit copied 5 times), zero padding to fill one OFDM symbol \\
+Interleaver & Spreads repeated bits over different subcarriers & Row-write / column-read block interleaver ($R \times C$ matrix) \\
+Mapper & BPSK or 16-QAM (Gray coded, unit average energy) & \texttt{mapper()} function \\
+IFFT & 256-point inverse FFT & \texttt{sqrt(N)*ifft(X)}, $N = 256$ \\
+Cyclic extension & Copies the last 64 samples to the front & $N_{cp} = 64$ samples \\
+Channel & Flat or frequency-selective Rayleigh, plus AWGN & Complex Gaussian gains $H$, applied in the frequency domain \\
+Receiver & Remove CP, FFT, equalize, demap, deinterleave, decode & Zero-forcing equalizer, hard decisions, majority vote \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==================================================================
+\section{Simulation parameters}
+
+\begin{table}[H]
+\centering
+\caption{Simulation parameters}
+\begin{tabular}{p{5.6cm} p{4.6cm} p{4.6cm}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Source} \\
+\midrule
+IFFT / number of subcarriers, $N$ & 256 & Project specification \\
+Cyclic prefix length, $N_{cp}$ & 64 samples ($N/4$) & Chosen (not given in the specification) \\
+Bits per OFDM symbol, BPSK & 256 (1 bit per subcarrier) & Specification \\
+Bits per OFDM symbol, 16-QAM & 1024 (4 bits per subcarrier) & Specification \\
+Repetition code & Rate $1/5$: 51 info bits (BPSK), 204 info bits (16-QAM) & Specification \\
+Interleaver, BPSK & $16 \times 16$ (256 bits) & specification  \\
+Interleaver, 16-QAM & $32 \times 32$ (1024 bits) & Specification \\
+SNR range & 0 to 30 dB in steps of 3 dB & Chosen \\
+OFDM symbols per SNR point, \texttt{nSym} & 2000 & Chosen (affects smoothness and lowest measurable BER) \\
+Random seed & \texttt{rng(1)} & Chosen, so results are repeatable \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==================================================================
+\section{Transmitter}
+
+\subsection{Data bits and coding}
+
+For each OFDM symbol, $K_d$ random information bits are generated. Without coding, $K_d$ equals the number of bits per symbol. With the repetition code, $K_d = \lfloor N_b/5 \rfloor$, where $N_b$ is 256 for BPSK and 1024 for 16-QAM. Each information bit is repeated five times, and the remaining positions are filled with zeros so the block has exactly $N_b$ bits.
+
+\begin{lstlisting}[language=Matlab]
+data = randi([0 1], Kd, 1);
+cb   = repelem(data, 5, 1);          % rate 1/5 repetition
+cb   = [cb; zeros(Nb-5*Kd, 1)];      % zero padding up to Nb bits
+\end{lstlisting}
+
+For BPSK this gives 51 information bits, 255 coded bits, and 1 zero. For 16-QAM it gives 204 information bits, 1020 coded bits, and 4 zeros. This matches the project specification.
+
+\subsection{Interleaver}
+
+The interleaver writes the bits row by row into an $R \times C$ matrix and reads them out column by column. The five copies of a repeated bit are therefore separated by about $R$ positions in the transmitted order. Because the OFDM symbol maps bits to subcarriers in order, the copies land on different subcarriers, which in the frequency-selective case fade independently. The deinterleaver performs the exact inverse operation.
+
+\begin{lstlisting}[language=Matlab]
+function out = interleave(bits, R, C)
+    M   = reshape(bits, C, R).';     % write row-wise
+    out = M(:);                      % read column-wise
+end
+\end{lstlisting}
+
+\subsection{Mapper}
+
+BPSK maps a 0 to $-1$ and a 1 to $+1$. 16-QAM maps each group of four bits to one point on a $4 \times 4$ grid. The two bits of each axis are Gray coded, so neighboring points differ in one bit. The levels are $-3, -1, +1, +3$, and the whole constellation is divided by $\sqrt{10}$ so that the average symbol energy is 1.
+
+\begin{center}
+\begin{tabular}{l c c c c}
+\toprule
+Bits (per axis) & 00 & 01 & 11 & 10 \\
+\midrule
+Level & $-3$ & $-1$ & $+1$ & $+3$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[language=Matlab]
+% 16-QAM: 4 bits -> I and Q levels
+I = (2*B(1,:)-1).*(3-2*B(2,:));
+Q = (2*B(3,:)-1).*(3-2*B(4,:));
+s = (I + 1j*Q).'/sqrt(10);       % unit average energy
+\end{lstlisting}
+
+\subsection{IFFT and cyclic prefix}
+
+The 256 mapped symbols form one OFDM symbol in the frequency domain. The IFFT converts them to 256 time-domain samples. MATLAB's \texttt{ifft} divides by $N$, so the factor $\sqrt{N}$ keeps the average power per sample equal to 1. The cyclic prefix copies the last 64 samples to the front of the symbol, which in a real channel prevents interference between consecutive OFDM symbols.
+
+\begin{lstlisting}[language=Matlab]
+x   = sqrt(N)*ifft(X);
+xcp = [x(end-Ncp+1:end); x];     % add cyclic prefix
+\end{lstlisting}
+
+%==================================================================
+\section{Channel models}
+
+Both channels are modeled as complex Gaussian gains with unit average power, which gives Rayleigh-distributed amplitudes. The received signal, after the channel gain and before the noise, is $Y = HX$, where $X$ is the transmitted subcarrier value and $H$ is the channel gain. Noise is added after the channel and is independent of it.
+
+\subsection{Flat Rayleigh fading}
+
+One gain $H$ is drawn for each OFDM symbol and multiplies all 256 subcarriers equally. Every bit in the symbol sees the same fade, so interleaving and repetition coding cannot average out the fading.
+
+\begin{lstlisting}[language=Matlab]
+H = (randn + 1j*randn)/sqrt(2) * ones(N,1);   % one gain for all subcarriers
+\end{lstlisting}
+
+\subsection{Frequency-selective Rayleigh fading}
+
+Each of the 256 subcarriers receives its own independent Rayleigh gain, as the specification requires. The fading is applied in the frequency domain: the FFT of the block is multiplied by $H$, and the result is transformed back. The cyclic prefix is then rebuilt from the faded block.
+
+\begin{lstlisting}[language=Matlab]
+H    = (randn(N,1) + 1j*randn(N,1))/sqrt(2);   % one gain per subcarrier
+tmp  = ifft(fft(tmp).*H);
+rxcp = [tmp(end-Ncp+1:end); tmp];
+\end{lstlisting}
+
+Because the cyclic prefix is rebuilt from the faded block, there is no inter-symbol interference in this model. This is a simplification, and it should be stated in the report.
+
+%==================================================================
+\section{Noise and SNR definition}
+
+Complex white Gaussian noise is added to the time-domain signal, with variance $N_0$ per complex sample. After the FFT and division by $\sqrt{N}$, the noise on each subcarrier also has variance $N_0$.
+
+\begin{lstlisting}[language=Matlab]
+rxcp = rxcp + sqrt(N0/2)*(randn(size(rxcp)) + 1j*randn(size(rxcp)));
+\end{lstlisting}
+
+In \texttt{ofdm\_project.m} the SNR is $E_b/N_0$, where $E_b$ is the energy per information bit. Each OFDM symbol has total energy $N$, because every subcarrier has unit energy. Dividing by the number of information bits $K_d$ gives $E_b$:
+
+\begin{lstlisting}[language=Matlab]
+Eb = N / Kd;                          % energy per information bit
+N0 = Eb / 10^(EbN0_dB(i)/10);
+\end{lstlisting}
+
+Using $E_b/N_0$ makes the coded and uncoded curves fair to compare. The repetition code uses five times as many coded bits, so at the same $E_b/N_0$ it has less energy per coded bit. A companion file, \texttt{ofdm\_project\_snr.m}, uses a plain symbol SNR instead, with \texttt{N0 = 1/10\^{}(SNR\_dB/10)}. In that version the x-axis is $E_s/N_0$. Both are valid definitions, but the report must state which one is used. For uncoded BPSK, $E_s = E_b$, so the theoretical curve in Section~\ref{sec:theory} applies to either definition.
+
+%==================================================================
+\section{Receiver}
+
+The receiver reverses the transmitter steps in order:
+\begin{enumerate}[leftmargin=*]
+  \item Remove the cyclic prefix: keep the samples from $N_{cp}+1$ to the end of the block.
+  \item Take the FFT and divide by $\sqrt{N}$ to return to the subcarrier values.
+  \item Equalize by dividing by the channel gain. The receiver is assumed to know $H$ exactly (perfect channel state information), so this is a zero-forcing equalizer.
+  \item Make hard decisions with the demapper. For BPSK the sign of the real part decides the bit; for 16-QAM the sign and the magnitude of each axis decide the two bits.
+  \item Deinterleave the bits to restore the original order.
+  \item For coded transmissions, take each group of five bits and decide by majority vote (at least three of five ones gives a 1).
+  \item Count the errors against the original information bits.
+\end{enumerate}
+
+\begin{lstlisting}[language=Matlab]
+r   = rxcp(Ncp+1:end);          % remove cyclic prefix
+Y   = fft(r)/sqrt(N);           % back to subcarriers
+Yeq = Y ./ H;                   % zero-forcing equalizer
+rb  = demapper(Yeq, mod);       % hard decisions
+db  = deinterleave(rb, R, C);
+blk = reshape(db(1:5*Kd), 5, Kd);
+dec = (sum(blk,1) >= 3).';      % majority vote
+\end{lstlisting}
+
+Hard-decision decoding is used throughout. Soft decisions would give better performance, but the specification does not require them.
+
+%==================================================================
+\section{BER estimation and theory check}
+\label{sec:theory}
+
+For each SNR value, the BER is the total number of bit errors divided by the total number of information bits transmitted:
+\[
+  \mathrm{BER} = \frac{n_{\mathrm{err}}}{n_{\mathrm{blk}}\, n_O\, K_d}
+\]
+
+The theoretical BER of uncoded BPSK over flat Rayleigh fading is given by the well-known closed form:
+\[
+  P_b = \frac{1}{2}\left(1 - \sqrt{\frac{\gamma}{1+\gamma}}\right), \qquad \gamma = \frac{E_b}{N_0}\ \text{(linear)}
+\]
+
+This curve is drawn as a black dotted line on the BPSK flat, uncoded figure and on the combined BPSK figure. If the simulated flat, uncoded BPSK curve follows this line, the transmitter, channel, noise scaling, and receiver are all working correctly. This is the most important verification step in the project.
+
+%==================================================================
+\section{Assumptions and deviations}
+\label{sec:deviations}
+
+The following points should be stated clearly in the report:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Interleaver for BPSK.} The specification gives $32 \times 16$ for the scheme it calls QPSK. The project was later confirmed to mean BPSK. The current code uses $16 \times 16$ (256 bits), which matches one BPSK OFDM symbol, and this differs from the specification. If the instructor follows the specification exactly, change the BPSK line to \texttt{R = 32; C = 16} and process the bits in blocks of two OFDM symbols.
+  \item Cyclic prefix length of 64 samples is a chosen value, because the specification does not state one.
+  \item Perfect channel knowledge at the receiver.
+  \item Hard-decision decoding.
+  \item Idealized frequency-selective model: fading is applied in the frequency domain with no inter-symbol interference.
+  \item $E_b/N_0$ is used on the x-axis in the main file. The SNR variant is provided separately.
+  \item Only BPSK and 16-QAM are simulated. QPSK is not part of this project.
+\end{itemize}
+
+%==================================================================
+\section{Expected results and discussion}
+
+The following trends are expected from the theory. They should be checked against the plots produced by running the simulation, and the figures should be inserted with a description of what they show.
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Uncoded flat fading:} BER decreases slowly with SNR, about one decade per 10 dB, following the theory line for BPSK. This is the diversity-one behavior of Rayleigh fading.
+  \item \textbf{Uncoded frequency-selective fading:} performance is close to flat fading. Without coding, each bit depends on one subcarrier, so frequency selectivity does not provide diversity.
+  \item \textbf{Repetition code on flat fading:} little or no gain. All copies of a bit share the same fade, so the repetition cannot average the fading out. At high SNR it can be worse than uncoded transmission at the same $E_b/N_0$, because the energy is spread over five times as many coded bits.
+  \item \textbf{Repetition code on frequency-selective fading:} the largest improvement and a steeper curve at high SNR. The interleaver places the copies on independent subcarriers, giving frequency diversity.
+  \item \textbf{16-QAM compared with BPSK:} 16-QAM needs a higher $E_b/N_0$ for the same BER, but carries four bits per subcarrier, so it is more bandwidth-efficient.
+\end{itemize}
+
+Zero-error points cannot be drawn on a logarithmic axis, so the code omits them. For the coded frequency-selective case the BER may reach zero within the simulated SNR range. This should be reported as ``no errors observed with $N$ bits simulated'' rather than as an exact value. Increasing \texttt{nSym} lowers the smallest measurable BER, about $1/(n_{\mathrm{sym}} K_d)$ for one error.
+
+\subsection*{Figures}
+
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_BPSK_case1.png}{0.75\linewidth}{}
+  \caption{BPSK, flat fading, no coding}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_BPSK_case2.png}{0.75\linewidth}{}
+  \caption{BPSK, flat fading, repetition code}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_BPSK_case3.png}{0.75\linewidth}{}
+  \caption{BPSK, frequency-selective fading, no coding}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_BPSK_case4.png}{0.75\linewidth}{}
+  \caption{BPSK, frequency-selective fading, repetition code}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_BPSK_all.png}{0.8\linewidth}{}
+  \caption{BPSK, all four cases}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_16QAM_case1.png}{0.75\linewidth}{}
+  \caption{16-QAM, flat fading, no coding}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_16QAM_case2.png}{0.75\linewidth}{}
+  \caption{16-QAM, flat fading, repetition code}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_16QAM_case3.png}{0.75\linewidth}{}
+  \caption{16-QAM, frequency-selective fading, no coding}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_16QAM_case4.png}{0.75\linewidth}{}
+  \caption{16-QAM, frequency-selective fading, repetition code}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \IfFigure{OFDM_16QAM_all.png}{0.8\linewidth}{}
+  \caption{16-QAM, all four cases}
+\end{figure}
+
+
+\section{Conclusion}
+
+This project implemented an OFDM link with coding, interleaving, Gray-coded mapping, a 256-point IFFT with cyclic prefix, and two Rayleigh fading models, all simulated with Monte Carlo methods. The receiver uses zero-forcing equalization and hard decisions. The main result to demonstrate is that the repetition code, combined with interleaving, provides frequency diversity on the frequency-selective channel, while providing little benefit on the flat channel. The simulated curves should be compared with the theoretical BPSK curve to verify the implementation.
+
+\end{document}
